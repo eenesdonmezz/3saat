@@ -12,12 +12,14 @@ Akademisyenlerin ders materyallerini 6 haneli bir **ders kodu** ile öğrenciler
 - Kalan süreyi görmez; süresi dolan dosya listeden kendiliğinden düşer.
 
 **Akademisyen**
-- İki yolla hesap: kendi kaydı (e-posta doğrulamalı) ya da yöneticinin eklemesi.
+- İki yolla hesap: kendi kaydı ya da yöneticinin eklemesi.
+- Kayıt bilgileri: unvan (Prof. Dr., Doç. Dr., Dr. Öğr. Üyesi, Öğr. Gör. …), ad soyad, kurumsal e-posta, fakülte/yüksekokul, bölüm, şifre.
+- Kendi kaydı sadece kurumun e-posta alan adıyla yapılabilir (e-posta doğrulamalı). Alan adı `.env` dosyasındaki `VITE_ALLOWED_EMAIL_DOMAIN` ile ayarlanır (bkz. `.env.example`).
 - Kendine ait sabit, benzersiz 6 haneli ders kodu; tek tıkla kopyalama ve yenileme (eski kod anında geçersiz olur).
 - Her tür dosya (Word, Excel, PowerPoint, PDF, görsel, zip, video…), sürükle-bırak, çoklu yükleme, ilerleme çubuğu, dosya başına 500 MB sınır.
 - Aktif dosyalarda canlı geri sayım, süre dolmadan “Durdur”.
 - Arşiv: süresi dolan dosyalar silinmez; “Tekrar paylaş” (3 saat yeniden başlar), indir ya da kalıcı sil.
-- Hesap ayarları: unvan/ad ve şifre değişikliği.
+- Hesap ayarları: unvan, ad, fakülte, bölüm ve şifre değişikliği.
 
 **Yönetici**
 - Akademisyen ekleme (geçici şifreyle), dondurma/aktifleştirme, şifre sıfırlama, silme.
@@ -36,7 +38,7 @@ Akademisyenlerin ders materyallerini 6 haneli bir **ders kodu** ile öğrenciler
 | Akademisyen | `ayse@3saat.demo` | `demo1234` |
 | Yönetici | `admin@3saat.demo` | `demo1234` |
 
-Öğrenci olarak denemek için ana sayfada **482791** kodunu girin.
+Öğrenci olarak denemek için ana sayfada **482791** kodunu girin. Yeni kayıt denemek için `@universite.edu.tr` ile biten bir e-posta kullanın.
 
 ## Geliştirme
 
@@ -56,5 +58,6 @@ src/
   components/   Ortak bileşenler (OtpInput, Modal, Toast, ui)
   lib/store.ts  Prototip veri katmanı (backend bağlanınca değişecek tek dosya)
   lib/format.ts Biçimlendirme ve sabitler (3 saat, 500 MB)
+  lib/config.ts Kurum ayarları (e-posta alan adı, unvanlar, fakülte önerileri)
 docs/MIMARI.md  Backend ve güvenlik planı
 ```

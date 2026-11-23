@@ -19,8 +19,11 @@ create type app_role as enum ('admin', 'academic');
 
 create table profiles (
   id uuid primary key references auth.users on delete cascade,
+  title text not null check (title in ('Prof. Dr.','Doç. Dr.','Dr. Öğr. Üyesi','Öğr. Gör.','Öğr. Gör. Dr.','Arş. Gör.','Arş. Gör. Dr.')),
   full_name text not null,
   email text not null,
+  faculty text not null,
+  department text not null,
   is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
@@ -70,6 +73,15 @@ Kural: bir dosya `shared_at > now() - interval '3 hours'` ise aktiftir.
 - **user_roles, code_attempts:** istemciye tamamen kapalı.
 - **Anonim kullanıcı (öğrenci):** hiçbir tabloya erişimi yoktur; sadece edge function'ları çağırır.
 
+## Akademisyen hesabı ve kayıt
+
+Akademisyen için tutulan bilgiler: **unvan, ad soyad, kurumsal e-posta, fakülte/yüksekokul, bölüm** ve şifre (şifre Supabase Auth'ta hash'li tutulur, `profiles` tablosunda yer almaz). Sistem sadece kurum içi kullanım içindir; ek onay/izin adımı yoktur.
+
+- **Kendi kaydı:** Sadece kurum e-posta alan adı (`ALLOWED_EMAIL_DOMAIN`, ör. `ornek.edu.tr`) kabul edilir. Alt alan adları (ör. öğrenci adresleri `ogrenci.ornek.edu.tr`) reddedilir. Kontrol hem arayüzde hem sunucuda yapılır: Supabase **"Before User Created" auth hook**'u alan adı dışındaki kayıtları reddeder, böylece API doğrudan çağrılsa bile atlatılamaz. E-posta doğrulaması zorunludur.
+- **Yönetici ekleme:** Alan adı sınırı yoktur (ör. misafir öğretim üyeleri). Hesap e-posta doğrulaması olmadan aktif olur.
+- Kayıt bilgileri `raw_user_meta_data` ile gelir; `on auth.users insert` tetikleyicisi `profiles`, `user_roles` ('academic') ve `course_codes` satırlarını oluşturur.
+- Akademisyen unvan, ad, fakülte ve bölümünü hesap ayarlarından değiştirebilir; e-posta değişikliği yöneticiden istenir.
+
 ## Edge Functions
 
 | Fonksiyon | Kim | Ne yapar |
@@ -78,7 +90,7 @@ Kural: bir dosya `shared_at > now() - interval '3 hours'` ise aktiftir.
 | `upload-complete` | Akademisyen | R2'de dosyanın varlığını ve boyutunu doğrular, `ready` yapar, `shared_at = now()` |
 | `file-action` | Akademisyen | `reshare` / `stop` / `delete` / `download` (sahiplik kontrolüyle) |
 | `regenerate-code` | Akademisyen | Kriptografik rastgele, benzersiz yeni kod |
-| `student-files` | Herkes | Kodu doğrular, hız sınırı uygular, sadece aktif dosyaların ad/boyut/türünü döner |
+| `student-files` | Herkes | Kodu doğrular, hız sınırı uygular; akademisyenin unvan + adı, bölümü ve sadece aktif dosyaların ad/boyut/türünü döner |
 | `student-download` | Herkes | Kodu ve dosyanın hâlâ aktif olduğunu yeniden doğrular, 2 dk geçerli GET bağlantısı döner |
 | `admin-academics` | Yönetici | Listele, ekle (`auth.admin.createUser`), dondur, şifre sıfırla, sil (R2 dosyalarıyla birlikte) |
 
@@ -98,11 +110,13 @@ Tüm girdiler zod ile doğrulanır. Hata mesajları geneldir (iç ayrıntı sız
 
 1. Supabase projesi + yukarıdaki şema ve RLS.
 2. Cloudflare hesabı, kapalı R2 bucket, API anahtarı; bucket CORS'una sitenin adresi (PUT/GET).
-3. Edge function gizli değişkenleri: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `IP_HASH_SALT`. **Anahtarlar asla bu depoya yazılmaz.**
-4. `src/lib/store.ts` fonksiyonlarının gerçek çağrılarla değiştirilmesi.
-5. Güvenlik testleri: başka akademisyenin dosyasına erişim, süresi dolmuş dosya, hız sınırı, rol yükseltme.
+3. Kurum e-posta alan adı: arayüz için `VITE_ALLOWED_EMAIL_DOMAIN`, sunucu için auth hook'ta aynı değer.
+4. Edge function gizli değişkenleri: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `IP_HASH_SALT`. **Anahtarlar asla bu depoya yazılmaz.**
+5. `src/lib/store.ts` fonksiyonlarının gerçek çağrılarla değiştirilmesi.
+6. Güvenlik testleri: başka akademisyenin dosyasına erişim, süresi dolmuş dosya, hız sınırı, rol yükseltme.
 
 ## Açık kararlar
 
+- Kurum e-posta alan adı nedir? (Şu an yer tutucu: `universite.edu.tr`)
 - Öğrenci kalan süreyi görsün mü? (Şu an: hayır)
 - Dosya sınırı 500 MB mı, 1 GB mı? (Şu an: 500 MB)

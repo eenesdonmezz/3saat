@@ -7,6 +7,8 @@ import { useToast } from "../components/Toast";
 import { useStore } from "../lib/hooks";
 import * as api from "../lib/store";
 import { formatBytes, formatDate } from "../lib/format";
+import { displayName, type AcademicProfile } from "../lib/types";
+import { ProfileFields, emptyProfile } from "../components/ProfileFields";
 
 const STORAGE_LIMIT = 10 * 1024 ** 3;
 
@@ -24,7 +26,7 @@ export default function Admin() {
   if (user.role !== "admin") return <Navigate to="/panel" replace />;
 
   const stats = api.adminStats();
-  const rows = api.listAcademics().filter((r) => `${r.name} ${r.email}`.toLocaleLowerCase("tr").includes(q.toLocaleLowerCase("tr")));
+  const rows = api.listAcademics().filter((r) => `${displayName(r)} ${r.email} ${r.faculty} ${r.department}`.toLocaleLowerCase("tr").includes(q.toLocaleLowerCase("tr")));
 
   const run = async (key: string, fn: () => Promise<unknown>, ok: string) => {
     setBusy(key);
@@ -44,7 +46,7 @@ export default function Admin() {
         right={
           <>
             <span className="rounded border border-zinc-200 px-2 py-0.5 font-mono text-[10px]">YÖNETİCİ</span>
-            <span className="hidden text-zinc-500 sm:inline">{user.name}</span>
+            <span className="hidden text-zinc-500 sm:inline">{displayName(user)}</span>
             <button className="btn-ghost" onClick={() => { api.logout(); nav("/"); }}>Çıkış</button>
           </>
         }
@@ -74,7 +76,8 @@ export default function Admin() {
             {rows.map((r) => (
               <li key={r.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 p-4 text-sm sm:flex-nowrap">
                 <div className="min-w-0 flex-1 basis-full sm:basis-auto">
-                  <p className="font-medium">{r.name}</p>
+                  <p className="font-medium">{displayName(r)}</p>
+                  <p className="truncate text-xs text-zinc-500">{r.department} · {r.faculty}</p>
                   <p className="truncate text-xs text-zinc-400">
                     {r.email} · {r.fileCount} dosya ({r.activeCount} aktif) · {formatBytes(r.bytes)} · {formatDate(r.createdAt)}
                   </p>
@@ -110,7 +113,7 @@ export default function Admin() {
           </>
         }
       >
-        <span className="font-medium text-zinc-900">{toDelete?.name}</span> hesabı ve {toDelete?.fileCount} dosyası kalıcı olarak silinecek. Bu işlem geri alınamaz.
+        <span className="font-medium text-zinc-900">{toDelete && displayName(toDelete)}</span> hesabı ve {toDelete?.fileCount} dosyası kalıcı olarak silinecek. Bu işlem geri alınamaz.
       </Modal>
     </div>
   );
@@ -135,8 +138,7 @@ function Stat({ label, value, suffix, bar }: { label: string; value: string; suf
 
 function AddAcademicModal({ onClose }: { onClose: () => void }) {
   const toast = useToast();
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [p, setP] = useState<AcademicProfile>(emptyProfile());
   const [pw, setPw] = useState(api.generateTempPassword());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -155,7 +157,7 @@ function AddAcademicModal({ onClose }: { onClose: () => void }) {
               setSaving(true);
               setError(null);
               try {
-                await api.adminCreateAcademic(name, email, pw);
+                await api.adminCreateAcademic(p, pw);
                 toast("Akademisyen eklendi");
                 onClose();
               } catch (e) {
@@ -172,11 +174,8 @@ function AddAcademicModal({ onClose }: { onClose: () => void }) {
     >
       <p className="mb-5">Hesap hemen aktif olur, e-posta doğrulaması gerekmez.</p>
       {error && <p className="mb-4 text-xs text-red-600">{error}</p>}
-      <label className="label">Unvan, Ad Soyad</label>
-      <input className="input mb-4 text-zinc-900" placeholder="Prof. Dr. Ad Soyad" value={name} onChange={(e) => setName(e.target.value)} />
-      <label className="label">E-posta</label>
-      <input className="input mb-4 text-zinc-900" type="email" placeholder="ornek@universite.edu.tr" value={email} onChange={(e) => setEmail(e.target.value)} />
-      <label className="label">Geçici şifre</label>
+      <ProfileFields value={p} onChange={setP} />
+      <label className="label mt-4">Geçici şifre</label>
       <div className="flex gap-2">
         <input className="input font-mono text-zinc-900" value={pw} onChange={(e) => setPw(e.target.value)} />
         <button className="btn-icon" title="Yeni şifre üret" onClick={() => setPw(api.generateTempPassword())}><RefreshCw className="h-4 w-4" /></button>

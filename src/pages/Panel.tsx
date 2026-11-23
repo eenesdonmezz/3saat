@@ -7,7 +7,8 @@ import { useToast } from "../components/Toast";
 import { useNow, useStore } from "../lib/hooks";
 import * as api from "../lib/store";
 import { MAX_FILE_BYTES, formatBytes, formatCode, formatDate, formatRemaining, formatTime } from "../lib/format";
-import type { FileRecord } from "../lib/types";
+import { displayName, type AcademicProfile, type FileRecord, type User } from "../lib/types";
+import { ProfileFields } from "../components/ProfileFields";
 
 interface UploadItem { key: string; name: string; pct: number; status: "uploading" | "done" | "error"; error?: string }
 
@@ -80,7 +81,7 @@ export default function Panel() {
       <Header
         right={
           <>
-            <span className="hidden text-zinc-500 sm:inline">{user.name}</span>
+            <span className="hidden text-zinc-500 sm:inline">{displayName(user)}</span>
             <button className="btn-icon" title="Hesap ayarları" aria-label="Hesap ayarları" onClick={() => setAccountOpen(true)}><UserIcon className="h-4 w-4" /></button>
             <button className="btn-ghost" onClick={() => { api.logout(); nav("/"); }}>Çıkış</button>
           </>
@@ -247,14 +248,14 @@ export default function Panel() {
         <span className="font-medium text-zinc-900">{toDelete?.name}</span> kalıcı olarak silinecek. Bu işlem geri alınamaz.
       </Modal>
 
-      {accountOpen && <AccountModal name={user.name} email={user.email} onClose={() => setAccountOpen(false)} />}
+      {accountOpen && <AccountModal user={user} onClose={() => setAccountOpen(false)} />}
     </div>
   );
 }
 
-export function AccountModal({ name, email, onClose }: { name: string; email: string; onClose: () => void }) {
+export function AccountModal({ user, onClose }: { user: User; onClose: () => void }) {
   const toast = useToast();
-  const [n, setN] = useState(name);
+  const [p, setP] = useState<AcademicProfile>({ title: user.title, name: user.name, email: user.email, faculty: user.faculty, department: user.department });
   const [pw, setPw] = useState("");
   const [saving, setSaving] = useState(false);
   return (
@@ -271,7 +272,7 @@ export function AccountModal({ name, email, onClose }: { name: string; email: st
             onClick={async () => {
               setSaving(true);
               try {
-                await api.updateProfile(n, pw);
+                await api.updateProfile(p, pw);
                 toast("Bilgileriniz kaydedildi");
                 onClose();
               } catch (e) {
@@ -287,11 +288,8 @@ export function AccountModal({ name, email, onClose }: { name: string; email: st
       }
     >
       <div className="mt-4">
-        <label className="label">Unvan, Ad Soyad</label>
-        <input className="input mb-4 text-zinc-900" value={n} onChange={(e) => setN(e.target.value)} />
-        <label className="label">E-posta</label>
-        <input className="input mb-4" value={email} disabled />
-        <label className="label">Yeni şifre (isteğe bağlı)</label>
+        <ProfileFields value={p} onChange={setP} email="readonly" />
+        <label className="label mt-4">Yeni şifre (isteğe bağlı)</label>
         <input type="password" className="input text-zinc-900" placeholder="En az 8 karakter" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" />
       </div>
     </Modal>

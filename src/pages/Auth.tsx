@@ -3,13 +3,16 @@ import { Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Lock, Mail } from "lucide-react";
 import { ErrorBox, Header, Spinner } from "../components/ui";
 import { ApiError, login, register, requestPasswordReset } from "../lib/store";
+import { ProfileFields, emptyProfile } from "../components/ProfileFields";
+import { ALLOWED_EMAIL_DOMAIN, isAllowedEmail } from "../lib/config";
+import type { AcademicProfile } from "../lib/types";
 
-function Shell({ children }: { children: ReactNode }) {
+function Shell({ children, wide }: { children: ReactNode; wide?: boolean }) {
   return (
     <div className="min-h-screen">
       <Header right={<Link to="/" className="btn-ghost"><ArrowLeft className="h-4 w-4" />Ana sayfa</Link>} />
       <main className="grid place-items-center px-5 py-16 sm:py-24">
-        <div className="w-full max-w-sm">{children}</div>
+        <div className={`w-full ${wide ? "max-w-md" : "max-w-sm"}`}>{children}</div>
       </main>
     </div>
   );
@@ -56,7 +59,7 @@ export function Login() {
         }}
       >
         <label className="label" htmlFor="email">E-posta</label>
-        <input id="email" type="email" required className="input mb-4" placeholder="ornek@universite.edu.tr" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
+        <input id="email" type="email" required className="input mb-4" placeholder={`ad.soyad@${ALLOWED_EMAIL_DOMAIN}`} value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
         <div className="flex justify-between">
           <label className="label" htmlFor="pw">Şifre</label>
           <Link to="/sifremi-unuttum" className="text-xs text-zinc-500 underline underline-offset-2">Şifremi unuttum</Link>
@@ -78,13 +81,15 @@ export function Login() {
 }
 
 export function Register() {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [profile, setProfile] = useState<AcademicProfile>(emptyProfile());
   const [password, setPassword] = useState("");
+  const [password2, setPassword2] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
   const weak = password.length > 0 && password.length < 8;
+  const mismatch = password2.length > 0 && password !== password2;
+  const wrongDomain = profile.email.includes("@") && profile.email.includes(".") && !isAllowedEmail(profile.email);
 
   if (done) {
     return (
@@ -92,7 +97,7 @@ export function Register() {
         <div className="text-center">
           <Mail className="mx-auto h-7 w-7" />
           <h1 className="mt-4 text-xl font-semibold">E-postanızı kontrol edin</h1>
-          <p className="mt-2 text-sm text-zinc-500">{email} adresine bir doğrulama bağlantısı gönderdik. Bağlantıya tıkladıktan sonra giriş yapabilirsiniz. Size özel 6 haneli ders kodunuz otomatik olarak oluşturuldu.</p>
+          <p className="mt-2 text-sm text-zinc-500">{profile.email} adresine bir doğrulama bağlantısı gönderdik. Bağlantıya tıkladıktan sonra giriş yapabilirsiniz. Size özel 6 haneli ders kodunuz otomatik olarak oluşturuldu.</p>
           <Link to="/giris" className="btn-primary mt-6">Girişe git</Link>
           <p className="mt-4 text-xs text-zinc-400">Prototipte e-posta gönderilmez, doğrudan giriş yapabilirsiniz.</p>
         </div>
@@ -101,18 +106,18 @@ export function Register() {
   }
 
   return (
-    <Shell>
+    <Shell wide>
       <h1 className="text-xl font-semibold">Akademisyen Kaydı</h1>
-      <p className="mb-8 mt-1 text-sm text-zinc-500">Yeni bir akademisyen hesabı oluşturun.</p>
+      <p className="mb-8 mt-1 text-sm text-zinc-500">Kurumsal e-postanızla hesap oluşturun.</p>
       {error && <ErrorBox>{error}</ErrorBox>}
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          if (weak) return;
+          if (weak || mismatch || wrongDomain) return;
           setLoading(true);
           setError(null);
           try {
-            await register(name, email, password);
+            await register(profile, password);
             setDone(true);
           } catch (err) {
             setError((err as Error).message);
@@ -121,13 +126,24 @@ export function Register() {
           }
         }}
       >
-        <label className="label" htmlFor="name">Unvan, Ad Soyad</label>
-        <input id="name" required minLength={2} className="input mb-4" placeholder="Dr. Öğr. Üyesi Ad Soyad" value={name} onChange={(e) => setName(e.target.value)} />
-        <label className="label" htmlFor="email">Kurumsal e-posta</label>
-        <input id="email" type="email" required className="input mb-4" placeholder="ornek@universite.edu.tr" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
-        <label className="label" htmlFor="pw">Şifre</label>
-        <input id="pw" type="password" required className={`input ${weak ? "border-red-500" : ""}`} placeholder="En az 8 karakter" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
+        <ProfileFields
+          value={profile}
+          onChange={setProfile}
+          domainHint
+          emailError={wrongDomain ? `Bu adresle kayıt olunamaz. Lütfen @${ALLOWED_EMAIL_DOMAIN} uzantılı e-postanızı kullanın.` : null}
+        />
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div>
+            <label className="label" htmlFor="pw">Şifre</label>
+            <input id="pw" type="password" required className={`input ${weak ? "border-red-500" : ""}`} placeholder="En az 8 karakter" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
+          </div>
+          <div>
+            <label className="label" htmlFor="pw2">Şifre (tekrar)</label>
+            <input id="pw2" type="password" required className={`input ${mismatch ? "border-red-500" : ""}`} value={password2} onChange={(e) => setPassword2(e.target.value)} autoComplete="new-password" />
+          </div>
+        </div>
         {weak && <p className="mt-1.5 text-xs text-red-600">Şifre en az 8 karakter olmalı.</p>}
+        {mismatch && <p className="mt-1.5 text-xs text-red-600">Şifreler eşleşmiyor.</p>}
         <button className="btn-primary mt-6 w-full py-2.5" disabled={loading}>{loading && <Spinner light />}Hesap oluştur</button>
       </form>
       <p className="mt-6 text-center text-sm text-zinc-500">
@@ -156,7 +172,7 @@ export function ForgotPassword() {
           <p className="mb-8 mt-1 text-sm text-zinc-500">E-postanıza bir sıfırlama bağlantısı göndereceğiz.</p>
           <form onSubmit={async (e) => { e.preventDefault(); setLoading(true); await requestPasswordReset(email); setLoading(false); setSent(true); }}>
             <label className="label" htmlFor="email">E-posta</label>
-            <input id="email" type="email" required className="input" placeholder="ornek@universite.edu.tr" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <input id="email" type="email" required className="input" placeholder={`ad.soyad@${ALLOWED_EMAIL_DOMAIN}`} value={email} onChange={(e) => setEmail(e.target.value)} />
             <button className="btn-primary mt-6 w-full py-2.5" disabled={loading}>{loading && <Spinner light />}Bağlantı gönder</button>
           </form>
           <Link to="/giris" className="mt-6 block text-center text-sm text-zinc-500">Girişe dön</Link>

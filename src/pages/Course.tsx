@@ -7,7 +7,7 @@ import { ApiError, studentDownload, studentFiles } from "../lib/store";
 import { formatBytes } from "../lib/format";
 import type { PublicFile } from "../lib/types";
 
-interface State { code: string; ownerName: string; files: PublicFile[] }
+interface State { code: string; ownerName: string; ownerDepartment: string; files: PublicFile[] }
 
 /** Öğrenci ekranı. Ders kodu URL'de değil, sadece sayfa durumunda tutulur. */
 export default function Course() {
@@ -74,7 +74,8 @@ export default function Course() {
           <div>
             <p className="eyebrow">Öğretim üyesi</p>
             <h1 className="mt-1 text-2xl font-semibold">{data.ownerName}</h1>
-            <p className="mt-1 text-sm text-zinc-500">{data.files.length ? `${data.files.length} dosya paylaşılıyor` : "Şu anda paylaşım yok"}</p>
+            {data.ownerDepartment && <p className="text-sm text-zinc-500">{data.ownerDepartment}</p>}
+            <p className="mt-3 text-sm text-zinc-500">{data.files.length ? `${data.files.length} dosya paylaşılıyor` : "Şu anda paylaşım yok"}</p>
           </div>
           {data.files.length > 1 && (
             <button className="btn-primary" onClick={downloadAll} disabled={busy !== null}>

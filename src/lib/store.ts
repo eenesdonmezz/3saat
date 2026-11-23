@@ -7,9 +7,11 @@
  * sadece bu dosya değişecek, ekranlar aynı kalacak.
  */
 import { MAX_FILE_BYTES, SHARE_DURATION_MS } from "./format";
-import type { FileRecord, PublicFile, User } from "./types";
+import type { AcademicProfile, FileRecord, PublicFile, User } from "./types";
+import { displayName } from "./types";
+import { ACADEMIC_TITLES, ALLOWED_EMAIL_DOMAIN, isAllowedEmail } from "./config";
 
-const KEY = "3saat-demo-v1";
+const KEY = "3saat-demo-v2";
 const ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 const MAX_FAILED_ATTEMPTS = 10;
 
@@ -37,14 +39,16 @@ function seed(): DB {
   const now = Date.now();
   const min = 60 * 1000;
   const day = 24 * 60 * min;
-  const admin: User = { id: uid(), name: "Enes", email: "admin@3saat.demo", password: "demo1234", role: "admin", active: true, code: "100200", createdAt: now - 40 * day };
-  const ayse: User = { id: uid(), name: "Dr. Ayşe Yılmaz", email: "ayse@3saat.demo", password: "demo1234", role: "academic", active: true, code: "482791", createdAt: now - 52 * day };
-  const others: User[] = [
-    ["Prof. Dr. Mehmet Kaya", "mkaya@3saat.demo", "305618", true, 49],
-    ["Öğr. Gör. Zeynep Demir", "zdemir@3saat.demo", "771204", true, 22],
-    ["Doç. Dr. Ali Şahin", "asahin@3saat.demo", "590331", true, 9],
-    ["Dr. Can Öztürk", "cozturk@3saat.demo", "246810", false, 3],
-  ].map(([name, email, code, active, d]) => ({ id: uid(), name: name as string, email: email as string, password: "demo1234", role: "academic" as const, active: active as boolean, code: code as string, createdAt: now - (d as number) * day }));
+  const admin: User = { id: uid(), title: "", name: "Enes", faculty: "", department: "Sistem Yöneticisi", email: "admin@3saat.demo", password: "demo1234", role: "admin", active: true, code: "100200", createdAt: now - 40 * day };
+  const ayse: User = { id: uid(), title: "Dr. Öğr. Üyesi", name: "Ayşe Yılmaz", faculty: "Mühendislik ve Mimarlık Fakültesi", department: "Bilgisayar Mühendisliği", email: "ayse@3saat.demo", password: "demo1234", role: "academic", active: true, code: "482791", createdAt: now - 52 * day };
+  const others: User[] = (
+    [
+      ["Prof. Dr.", "Mehmet Kaya", "Fen-Edebiyat Fakültesi", "Matematik", "mkaya@3saat.demo", "305618", true, 49],
+      ["Öğr. Gör.", "Zeynep Demir", "Mühendislik ve Mimarlık Fakültesi", "Elektrik-Elektronik Mühendisliği", "zdemir@3saat.demo", "771204", true, 22],
+      ["Doç. Dr.", "Ali Şahin", "İktisadi ve İdari Bilimler Fakültesi", "İşletme", "asahin@3saat.demo", "590331", true, 9],
+      ["Öğr. Gör. Dr.", "Can Öztürk", "Meslek Yüksekokulu", "Bilgisayar Programcılığı", "cozturk@3saat.demo", "246810", false, 3],
+    ] as const
+  ).map(([title, name, faculty, department, email, code, active, d]) => ({ id: uid(), title, name, faculty, department, email, password: "demo1234", role: "academic" as const, active, code, createdAt: now - d * day }));
   const f = (ownerId: string, name: string, size: number, mime: string, sharedAgoMin: number | null, uploadedAgoMin: number): FileRecord => ({
     id: uid(), ownerId, name, size, mime, uploadedAt: now - uploadedAgoMin * min, sharedAt: sharedAgoMin === null ? null : now - sharedAgoMin * min,
   });
@@ -142,7 +146,7 @@ function findOwnerByCode(code: string): User | undefined {
   return db.users.find((u) => u.code === code && u.active && u.role === "academic");
 }
 
-export async function studentFiles(code: string): Promise<{ ownerName: string; files: PublicFile[] }> {
+export async function studentFiles(code: string): Promise<{ ownerName: string; ownerDepartment: string; files: PublicFile[] }> {
   await wait(500);
   checkRateLimit();
   const owner = findOwnerByCode(code);
@@ -156,7 +160,7 @@ export async function studentFiles(code: string): Promise<{ ownerName: string; f
     .filter((f) => f.ownerId === owner.id && isActive(f, now))
     .sort((a, b) => (b.sharedAt ?? 0) - (a.sharedAt ?? 0))
     .map(({ id, name, size, mime }) => ({ id, name, size, mime }));
-  return { ownerName: owner.name, files };
+  return { ownerName: displayName(owner), ownerDepartment: owner.department, files };
 }
 
 export async function studentDownload(code: string, fileId: string) {
@@ -192,20 +196,32 @@ export function logout() {
   commit();
 }
 
-export async function register(name: string, email: string, password: string) {
+function validateProfile(p: AcademicProfile) {
+  if (!(ACADEMIC_TITLES as readonly string[]).includes(p.title)) throw new ApiError("invalid", "Lütfen unvanınızı seçin.");
+  if (p.name.trim().length < 3) throw new ApiError("invalid", "Ad Soyad en az 3 karakter olmalı.");
+  if (!/^\S+@\S+\.\S+$/.test(p.email.trim())) throw new ApiError("invalid", "Geçerli bir e-posta girin.");
+  if (p.faculty.trim().length < 2) throw new ApiError("invalid", "Fakülte / yüksekokul gerekli.");
+  if (p.department.trim().length < 2) throw new ApiError("invalid", "Bölüm gerekli.");
+  if (db.users.some((u) => u.email.toLowerCase() === p.email.trim().toLowerCase())) throw new ApiError("exists", "Bu e-posta ile zaten bir hesap var.");
+}
+
+/** Kendi kendine kayıt: sadece kurum e-posta alan adı kabul edilir. */
+export async function register(p: AcademicProfile, password: string) {
   await wait();
+  if (!isAllowedEmail(p.email)) throw new ApiError("domain", `Sadece @${ALLOWED_EMAIL_DOMAIN} uzantılı kurumsal e-posta ile kayıt olunabilir.`);
+  validateProfile(p);
   if (password.length < 8) throw new ApiError("weak", "Şifre en az 8 karakter olmalı.");
-  if (db.users.some((u) => u.email.toLowerCase() === email.trim().toLowerCase())) throw new ApiError("exists", "Bu e-posta ile zaten bir hesap var.");
-  createUser(name, email, password);
+  createUser(p, password);
 }
 
 export async function requestPasswordReset(_email: string) {
   await wait();
 }
 
-function createUser(name: string, email: string, password: string): User {
+function createUser(p: AcademicProfile, password: string): User {
   const u: User = {
-    id: uid(), name: name.trim(), email: email.trim().toLowerCase(), password, role: "academic", active: true,
+    id: uid(), title: p.title, name: p.name.trim(), faculty: p.faculty.trim(), department: p.department.trim(),
+    email: p.email.trim().toLowerCase(), password, role: "academic", active: true,
     code: secureCode(new Set(db.users.map((x) => x.code))), createdAt: Date.now(),
   };
   db.users.push(u);
@@ -284,12 +300,17 @@ export async function regenerateCode(): Promise<string> {
   return u.code;
 }
 
-export async function updateProfile(name: string, newPassword: string) {
+export async function updateProfile(p: Omit<AcademicProfile, "email">, newPassword: string) {
   await wait();
   const u = requireUser();
-  if (name.trim().length < 2) throw new ApiError("invalid", "Ad Soyad en az 2 karakter olmalı.");
+  if (!(ACADEMIC_TITLES as readonly string[]).includes(p.title)) throw new ApiError("invalid", "Lütfen unvanınızı seçin.");
+  if (p.name.trim().length < 3) throw new ApiError("invalid", "Ad Soyad en az 3 karakter olmalı.");
+  if (p.faculty.trim().length < 2 || p.department.trim().length < 2) throw new ApiError("invalid", "Fakülte ve bölüm gerekli.");
   if (newPassword && newPassword.length < 8) throw new ApiError("weak", "Yeni şifre en az 8 karakter olmalı.");
-  u.name = name.trim();
+  u.title = p.title;
+  u.name = p.name.trim();
+  u.faculty = p.faculty.trim();
+  u.department = p.department.trim();
   if (newPassword) u.password = newPassword;
   commit();
 }
@@ -321,14 +342,13 @@ export function listAcademics(): AcademicRow[] {
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export async function adminCreateAcademic(name: string, email: string, tempPassword: string) {
+/** Yönetici ekleme: alan adı sınırı yoktur (ör. misafir öğretim üyeleri için). */
+export async function adminCreateAcademic(p: AcademicProfile, tempPassword: string) {
   await wait();
   requireAdmin();
-  if (name.trim().length < 2) throw new ApiError("invalid", "Ad Soyad gerekli.");
-  if (!/^\S+@\S+\.\S+$/.test(email)) throw new ApiError("invalid", "Geçerli bir e-posta girin.");
+  validateProfile(p);
   if (tempPassword.length < 8) throw new ApiError("weak", "Geçici şifre en az 8 karakter olmalı.");
-  if (db.users.some((u) => u.email.toLowerCase() === email.trim().toLowerCase())) throw new ApiError("exists", "Bu e-posta ile zaten bir hesap var.");
-  createUser(name, email, tempPassword);
+  createUser(p, tempPassword);
 }
 
 export async function adminSetActive(id: string, active: boolean) {
