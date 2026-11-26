@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Lock, Mail } from "lucide-react";
+import { Link, Navigate, useNavigate } from "react-router-dom";
+import { ArrowLeft, Check, Clock, KeyRound, Lock } from "lucide-react";
 import { ErrorBox, Header, Spinner } from "../components/ui";
-import { ApiError, login, register, requestPasswordReset } from "../lib/store";
 import { ProfileFields, emptyProfile } from "../components/ProfileFields";
-import { ALLOWED_EMAIL_DOMAIN, isAllowedEmail } from "../lib/config";
+import { ApiError, backend } from "../lib/backend";
+import { useAuth } from "../lib/auth";
+import { isAllowedEmail } from "../lib/config";
 import type { AcademicProfile } from "../lib/types";
 
 function Shell({ children, wide }: { children: ReactNode; wide?: boolean }) {
@@ -18,22 +19,44 @@ function Shell({ children, wide }: { children: ReactNode; wide?: boolean }) {
   );
 }
 
+function Notice({ icon, title, children, action }: { icon: ReactNode; title: string; children: ReactNode; action?: ReactNode }) {
+  return (
+    <div className="text-center">
+      <div className="mx-auto grid place-items-center">{icon}</div>
+      <h1 className="mt-4 text-xl font-semibold">{title}</h1>
+      <p className="mt-2 text-sm text-zinc-500">{children}</p>
+      {action && <div className="mt-6">{action}</div>}
+    </div>
+  );
+}
+
+const home = (role: string) => (role === "admin" ? "/yonetim" : "/panel");
+
 export function Login() {
   const nav = useNavigate();
+  const { me, setMe, domain } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
 
+  if (me) return <Navigate to={home(me.role)} replace />;
+
   if (error?.code === "inactive") {
     return (
       <Shell>
-        <div className="text-center">
-          <Lock className="mx-auto h-7 w-7" />
-          <h1 className="mt-4 text-xl font-semibold">Hesabınız dondurulmuş</h1>
-          <p className="mt-2 text-sm text-zinc-500">Hesabınız yönetici tarafından geçici olarak durduruldu. Bu süre içinde ders kodunuz da çalışmaz. Bilgi için sistem yöneticisine başvurun.</p>
-          <button className="btn-ghost mt-6" onClick={() => setError(null)}>Geri dön</button>
-        </div>
+        <Notice icon={<Lock className="h-7 w-7" />} title="Hesabınız dondurulmuş" action={<button className="btn-ghost" onClick={() => setError(null)}>Geri dön</button>}>
+          Hesabınız yönetici tarafından geçici olarak durduruldu. Bu süre içinde ders kodunuz da çalışmaz. Bilgi için sistem yöneticisine başvurun.
+        </Notice>
+      </Shell>
+    );
+  }
+  if (error?.code === "pending") {
+    return (
+      <Shell>
+        <Notice icon={<Clock className="h-7 w-7" />} title="Hesabınız onay bekliyor" action={<button className="btn-ghost" onClick={() => setError(null)}>Geri dön</button>}>
+          Kaydınız alındı. Sistem yöneticisi hesabınızı onayladığında giriş yapabilir ve ders kodunuzu görebilirsiniz.
+        </Notice>
       </Shell>
     );
   }
@@ -42,24 +65,30 @@ export function Login() {
     <Shell>
       <h1 className="text-xl font-semibold">Akademisyen Girişi</h1>
       <p className="mb-8 mt-1 text-sm text-zinc-500">Paylaşım panelinize erişin.</p>
-      {error && <ErrorBox>{error.message}</ErrorBox>}
+      {error && (
+        <ErrorBox>
+          {error.message}
+          {error.code === "rate_limited" && " Güvenlik nedeniyle giriş 15 dakika kilitlendi."}
+        </ErrorBox>
+      )}
       <form
         onSubmit={async (e) => {
           e.preventDefault();
           setLoading(true);
           setError(null);
           try {
-            const u = await login(email, password);
-            nav(u.role === "admin" ? "/yonetim" : "/panel");
+            const u = await backend.login(email, password);
+            setMe(u);
+            nav(home(u.role));
           } catch (err) {
-            setError(err as ApiError);
+            setError(err instanceof ApiError ? err : new ApiError("server", "Beklenmeyen bir hata oluştu."));
           } finally {
             setLoading(false);
           }
         }}
       >
         <label className="label" htmlFor="email">E-posta</label>
-        <input id="email" type="email" required className="input mb-4" placeholder={`ad.soyad@${ALLOWED_EMAIL_DOMAIN}`} value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
+        <input id="email" type="email" required className="input mb-4" placeholder={`ad.soyad@${domain}`} value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
         <div className="flex justify-between">
           <label className="label" htmlFor="pw">Şifre</label>
           <Link to="/sifremi-unuttum" className="text-xs text-zinc-500 underline underline-offset-2">Şifremi unuttum</Link>
@@ -70,17 +99,20 @@ export function Login() {
       <p className="mt-6 text-center text-sm text-zinc-500">
         Hesabınız yok mu? <Link to="/kayit" className="text-zinc-950 underline underline-offset-2">Kayıt olun</Link>
       </p>
-      <div className="mt-10 rounded-lg bg-zinc-50 p-4 text-xs leading-relaxed text-zinc-500">
-        <p className="mb-1 font-medium text-zinc-700">Prototip deneme hesapları (şifre: demo1234)</p>
-        Akademisyen: <button className="underline" onClick={() => { setEmail("ayse@3saat.demo"); setPassword("demo1234"); }}>ayse@3saat.demo</button>
-        <br />
-        Yönetici: <button className="underline" onClick={() => { setEmail("admin@3saat.demo"); setPassword("demo1234"); }}>admin@3saat.demo</button>
-      </div>
+      {backend.demo && (
+        <div className="mt-10 rounded-lg bg-zinc-50 p-4 text-xs leading-relaxed text-zinc-500">
+          <p className="mb-1 font-medium text-zinc-700">Tanıtım hesapları (şifre: demo1234)</p>
+          Akademisyen: <button className="underline" onClick={() => { setEmail("ayse@3saat.demo"); setPassword("demo1234"); }}>ayse@3saat.demo</button>
+          <br />
+          Yönetici: <button className="underline" onClick={() => { setEmail("admin@3saat.demo"); setPassword("demo1234"); }}>admin@3saat.demo</button>
+        </div>
+      )}
     </Shell>
   );
 }
 
 export function Register() {
+  const { domain } = useAuth();
   const [profile, setProfile] = useState<AcademicProfile>(emptyProfile());
   const [password, setPassword] = useState("");
   const [password2, setPassword2] = useState("");
@@ -89,18 +121,14 @@ export function Register() {
   const [done, setDone] = useState(false);
   const weak = password.length > 0 && password.length < 8;
   const mismatch = password2.length > 0 && password !== password2;
-  const wrongDomain = profile.email.includes("@") && profile.email.includes(".") && !isAllowedEmail(profile.email);
+  const wrongDomain = profile.email.includes("@") && profile.email.includes(".") && !isAllowedEmail(profile.email, domain);
 
   if (done) {
     return (
       <Shell>
-        <div className="text-center">
-          <Mail className="mx-auto h-7 w-7" />
-          <h1 className="mt-4 text-xl font-semibold">E-postanızı kontrol edin</h1>
-          <p className="mt-2 text-sm text-zinc-500">{profile.email} adresine bir doğrulama bağlantısı gönderdik. Bağlantıya tıkladıktan sonra giriş yapabilirsiniz. Size özel 6 haneli ders kodunuz otomatik olarak oluşturuldu.</p>
-          <Link to="/giris" className="btn-primary mt-6">Girişe git</Link>
-          <p className="mt-4 text-xs text-zinc-400">Prototipte e-posta gönderilmez, doğrudan giriş yapabilirsiniz.</p>
-        </div>
+        <Notice icon={<Check className="h-7 w-7" />} title="Kaydınız alındı" action={<Link to="/giris" className="btn-primary">Girişe git</Link>}>
+          Hesabınız sistem yöneticisinin onayına gönderildi. Onaylandığında {profile.email} ve şifrenizle giriş yapabilirsiniz; size özel 6 haneli ders kodunuz da o an oluşturulur.
+        </Notice>
       </Shell>
     );
   }
@@ -108,7 +136,7 @@ export function Register() {
   return (
     <Shell wide>
       <h1 className="text-xl font-semibold">Akademisyen Kaydı</h1>
-      <p className="mb-8 mt-1 text-sm text-zinc-500">Kurumsal e-postanızla hesap oluşturun.</p>
+      <p className="mb-8 mt-1 text-sm text-zinc-500">Kurumsal e-postanızla hesap oluşturun. Hesabınız yönetici onayından sonra açılır.</p>
       {error && <ErrorBox>{error}</ErrorBox>}
       <form
         onSubmit={async (e) => {
@@ -117,7 +145,7 @@ export function Register() {
           setLoading(true);
           setError(null);
           try {
-            await register(profile, password);
+            await backend.register(profile, password);
             setDone(true);
           } catch (err) {
             setError((err as Error).message);
@@ -130,7 +158,7 @@ export function Register() {
           value={profile}
           onChange={setProfile}
           domainHint
-          emailError={wrongDomain ? `Bu adresle kayıt olunamaz. Lütfen @${ALLOWED_EMAIL_DOMAIN} uzantılı e-postanızı kullanın.` : null}
+          emailError={wrongDomain ? `Bu adresle kayıt olunamaz. Lütfen @${domain} uzantılı e-postanızı kullanın.` : null}
         />
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <div>
@@ -153,31 +181,13 @@ export function Register() {
   );
 }
 
+/** E-posta servisi olmadığı için şifre sıfırlamayı yönetici yapar. */
 export function ForgotPassword() {
-  const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
-  const [loading, setLoading] = useState(false);
   return (
     <Shell>
-      {sent ? (
-        <div className="text-center">
-          <Mail className="mx-auto h-7 w-7" />
-          <h1 className="mt-4 text-xl font-semibold">Bağlantı gönderildi</h1>
-          <p className="mt-2 text-sm text-zinc-500">Bu e-posta adresiyle kayıtlı bir hesap varsa şifre sıfırlama bağlantısı gönderildi.</p>
-          <Link to="/giris" className="btn-ghost mt-6">Girişe dön</Link>
-        </div>
-      ) : (
-        <>
-          <h1 className="text-xl font-semibold">Şifrenizi sıfırlayın</h1>
-          <p className="mb-8 mt-1 text-sm text-zinc-500">E-postanıza bir sıfırlama bağlantısı göndereceğiz.</p>
-          <form onSubmit={async (e) => { e.preventDefault(); setLoading(true); await requestPasswordReset(email); setLoading(false); setSent(true); }}>
-            <label className="label" htmlFor="email">E-posta</label>
-            <input id="email" type="email" required className="input" placeholder={`ad.soyad@${ALLOWED_EMAIL_DOMAIN}`} value={email} onChange={(e) => setEmail(e.target.value)} />
-            <button className="btn-primary mt-6 w-full py-2.5" disabled={loading}>{loading && <Spinner light />}Bağlantı gönder</button>
-          </form>
-          <Link to="/giris" className="mt-6 block text-center text-sm text-zinc-500">Girişe dön</Link>
-        </>
-      )}
+      <Notice icon={<KeyRound className="h-7 w-7" />} title="Şifrenizi mi unuttunuz?" action={<Link to="/giris" className="btn-ghost">Girişe dön</Link>}>
+        Sistem yöneticisine başvurun. Yönetici size yeni bir geçici şifre verir; giriş yaptıktan sonra Hesap ayarları’ndan kendi şifrenizi belirleyebilirsiniz.
+      </Notice>
     </Shell>
   );
 }

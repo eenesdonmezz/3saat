@@ -1,10 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
-import { getVersion, subscribe } from "./store";
-
-/** Veri katmanı değiştiğinde bileşeni yeniden çizer. */
-export function useStore() {
-  return useSyncExternalStore(subscribe, getVersion);
-}
+import { useEffect, useState } from "react";
 
 /** Geri sayımlar için her saniye güncellenen zaman. */
 export function useNow(intervalMs = 1000) {

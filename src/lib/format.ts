@@ -1,5 +1,4 @@
-export const SHARE_DURATION_MS = 3 * 60 * 60 * 1000;
-export const MAX_FILE_BYTES = 500 * 1024 * 1024;
+export { SHARE_DURATION_MS, MAX_FILE_BYTES } from "../../shared/constants";
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

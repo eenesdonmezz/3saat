@@ -1,0 +1,48 @@
+{
+  // 3Saat: tek Cloudflare Worker (site + API) + D1 veritabanı + R2 dosya deposu.
+  // Kurulum: KURULUM.md
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "3saat",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Arayüz (vite build çıktısı). /api/* istekleri önce Worker'a gider.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "3saat",
+      // `npx wrangler d1 create 3saat` komutunun verdiği kimliği buraya yazın
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "3saat-dosyalar"
+    }
+  ],
+
+  // Gece temizliği: yarım kalan yüklemeler, süresi dolmuş oturumlar, eski denemeler
+  "triggers": { "crons": ["17 3 * * *"] },
+
+  "vars": {
+    // Sadece bu alan adıyla biten e-postalar kendi kendine kayıt olabilir
+    "ALLOWED_EMAIL_DOMAIN": "universite.edu.tr",
+    // R2 kovasının adı (yukarıdaki bucket_name ile aynı)
+    "R2_BUCKET_NAME": "3saat-dosyalar",
+    // Arşivdeki dosyaların otomatik silinmesi (gün). 0 = kapalı
+    "ARCHIVE_RETENTION_DAYS": "0"
+  }
+
+  // Gizli değişkenler (koda yazılmaz, `npx wrangler secret put AD` ile girilir):
+  //   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, IP_HASH_SALT
+}

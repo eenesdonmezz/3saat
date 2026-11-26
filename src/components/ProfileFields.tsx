@@ -1,4 +1,5 @@
-import { ACADEMIC_TITLES, ALLOWED_EMAIL_DOMAIN, FACULTY_SUGGESTIONS } from "../lib/config";
+import { ACADEMIC_TITLES, FACULTY_SUGGESTIONS } from "../lib/config";
+import { useAuth } from "../lib/auth";
 import type { AcademicProfile } from "../lib/types";
 
 interface Props {
@@ -14,6 +15,7 @@ interface Props {
 
 /** Akademisyen bilgileri: unvan, ad soyad, e-posta, fakülte, bölüm. */
 export function ProfileFields({ value, onChange, email = "edit", domainHint, emailError }: Props) {
+  const ALLOWED_EMAIL_DOMAIN = useAuth().domain;
   const set = (k: keyof AcademicProfile) => (e: { target: { value: string } }) => onChange({ ...value, [k]: e.target.value });
   return (
     <div className="space-y-4 text-zinc-900">

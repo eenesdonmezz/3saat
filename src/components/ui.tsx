@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Clock } from "lucide-react";
 import { extOf } from "../lib/format";
-import { resetDemo } from "../lib/store";
+import { resetDemo } from "../lib/backend/demo";
 
 export function Logo() {
   return (
@@ -50,7 +50,7 @@ export function ErrorBox({ children }: { children: ReactNode }) {
 export function DemoBanner() {
   return (
     <div className="bg-zinc-950 px-4 py-1.5 text-center text-xs text-zinc-300">
-      Prototip sürümü · veriler sadece bu tarayıcıda tutulur ·{" "}
+      Tanıtım sürümü · veriler sadece bu tarayıcıda tutulur ·{" "}
       <button className="underline underline-offset-2 hover:text-white" onClick={resetDemo}>Örnek verilere dön</button>
     </div>
   );

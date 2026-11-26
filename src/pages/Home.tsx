@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { AlertCircle, ArrowRight, Lock } from "lucide-react";
 import { Header, Spinner } from "../components/ui";
 import { OtpInput } from "../components/OtpInput";
-import { ApiError, studentFiles } from "../lib/store";
+import { ApiError, backend } from "../lib/backend";
 import { formatRemaining } from "../lib/format";
 import { useNow } from "../lib/hooks";
 
@@ -21,7 +21,7 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      const res = await studentFiles(c);
+      const res = await backend.studentFiles(c);
       nav("/ders", { state: { code: c, ...res } });
     } catch (e) {
       if (e instanceof ApiError && e.code === "rate_limited") setLockedUntil(e.retryAt ?? Date.now() + 15 * 60_000);

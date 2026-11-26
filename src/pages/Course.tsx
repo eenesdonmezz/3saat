@@ -3,9 +3,8 @@ import { Link, Navigate, useLocation } from "react-router-dom";
 import { Download, Inbox, RefreshCw } from "lucide-react";
 import { EmptyState, FileBadge, Header, Spinner } from "../components/ui";
 import { useToast } from "../components/Toast";
-import { ApiError, studentDownload, studentFiles } from "../lib/store";
+import { ApiError, backend, type PublicFile } from "../lib/backend";
 import { formatBytes } from "../lib/format";
-import type { PublicFile } from "../lib/types";
 
 interface State { code: string; ownerName: string; ownerDepartment: string; files: PublicFile[] }
 
@@ -22,7 +21,7 @@ export default function Course() {
     if (!initial) return;
     setRefreshing(true);
     try {
-      const res = await studentFiles(initial.code);
+      const res = await backend.studentFiles(initial.code);
       setData({ code: initial.code, ...res });
     } catch {
       /* kod geçersizleştiyse liste boşalır */
@@ -43,7 +42,7 @@ export default function Course() {
   const download = async (f: PublicFile) => {
     setBusy(f.id);
     try {
-      await studentDownload(data.code, f.id);
+      await backend.studentDownload(data.code, f.id);
     } catch (e) {
       toast(e instanceof Error ? e.message : "İndirme başarısız.", "error");
       if (e instanceof ApiError && e.code === "expired") refresh();
@@ -56,7 +55,7 @@ export default function Course() {
     setBusy("all");
     for (const f of data.files) {
       try {
-        await studentDownload(data.code, f.id);
+        await backend.studentDownload(data.code, f.id);
         await new Promise((r) => setTimeout(r, 400));
       } catch {
         /* süresi dolanı atla */

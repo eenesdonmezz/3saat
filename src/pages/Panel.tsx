@@ -1,41 +1,62 @@
-import { useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { Copy, Download, RefreshCw, Search, Share, Square, Trash2, Upload, User as UserIcon } from "lucide-react";
 import { EmptyState, FileBadge, Header, Spinner } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { useToast } from "../components/Toast";
-import { useNow, useStore } from "../lib/hooks";
-import * as api from "../lib/store";
-import { MAX_FILE_BYTES, formatBytes, formatCode, formatDate, formatRemaining, formatTime } from "../lib/format";
-import { displayName, type AcademicProfile, type FileRecord, type User } from "../lib/types";
+import { useNow } from "../lib/hooks";
+import { backend, type FileItem, type Me } from "../lib/backend";
+import { useAuth } from "../lib/auth";
+import { MAX_FILE_BYTES, SHARE_DURATION_MS, formatBytes, formatCode, formatDate, formatRemaining, formatTime } from "../lib/format";
+import { displayName, type AcademicProfile } from "../lib/types";
 import { ProfileFields } from "../components/ProfileFields";
 
 interface UploadItem { key: string; name: string; pct: number; status: "uploading" | "done" | "error"; error?: string }
 
+const isActive = (f: FileItem, now: number) => f.sharedAt !== null && now - f.sharedAt < SHARE_DURATION_MS;
+const remainingMs = (f: FileItem, now: number) => (f.sharedAt === null ? 0 : f.sharedAt + SHARE_DURATION_MS - now);
+
 export default function Panel() {
-  useStore();
-  const now = useNow();
+  const { me: user, setMe } = useAuth();
+  const [clockSkew, setClockSkew] = useState(0);
+  const now = useNow() + clockSkew;
   const nav = useNavigate();
   const toast = useToast();
-  const user = api.currentUser();
+  const [files, setFiles] = useState<FileItem[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<"active" | "archive">("active");
   const [q, setQ] = useState("");
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [drag, setDrag] = useState(false);
   const [confirmRegen, setConfirmRegen] = useState(false);
-  const [toDelete, setToDelete] = useState<FileRecord | null>(null);
+  const [toDelete, setToDelete] = useState<FileItem | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const files = api.myFiles();
+  const reload = useCallback(async () => {
+    try {
+      const r = await backend.myFiles();
+      setFiles(r.files);
+      setClockSkew(r.serverTime - Date.now());
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setLoaded(true);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    if (user?.role === "academic") reload();
+  }, [user?.role, reload]);
+
   const { active, archive, bytes } = useMemo(() => {
-    const match = (f: FileRecord) => f.name.toLocaleLowerCase("tr").includes(q.toLocaleLowerCase("tr"));
-    const a = files.filter((f) => api.isActive(f, now)).sort((x, y) => (y.sharedAt ?? 0) - (x.sharedAt ?? 0));
-    const r = files.filter((f) => !api.isActive(f, now)).sort((x, y) => (y.sharedAt ?? y.uploadedAt) - (x.sharedAt ?? x.uploadedAt));
+    const match = (f: FileItem) => f.name.toLocaleLowerCase("tr").includes(q.toLocaleLowerCase("tr"));
+    const a = files.filter((f) => isActive(f, now)).sort((x, y) => (y.sharedAt ?? 0) - (x.sharedAt ?? 0));
+    const r = files.filter((f) => !isActive(f, now)).sort((x, y) => (y.sharedAt ?? y.uploadedAt) - (x.sharedAt ?? x.uploadedAt));
     return { active: a.filter(match), archive: r.filter(match), bytes: files.reduce((s, f) => s + f.size, 0) };
   }, [files, now, q]);
-  const totalActive = files.filter((f) => api.isActive(f, now)).length;
+  const totalActive = files.filter((f) => isActive(f, now)).length;
 
   if (!user) return <Navigate to="/giris" replace />;
   if (user.role === "admin") return <Navigate to="/yonetim" replace />;
@@ -44,6 +65,7 @@ export default function Panel() {
     setBusy(key);
     try {
       await fn();
+      await reload();
       toast(ok);
     } catch (e) {
       toast((e as Error).message, "error");
@@ -60,9 +82,10 @@ export default function Panel() {
       const tooBig = file.size > MAX_FILE_BYTES;
       setUploads((u) => [...u, { key, name: file.name, pct: 0, status: tooBig ? "error" : "uploading", error: tooBig ? "500 MB sınırını aşıyor" : undefined }]);
       if (tooBig) return;
-      api
-        .uploadFile(file, (pct) => setUploads((u) => u.map((x) => (x.key === key ? { ...x, pct } : x))))
+      backend
+        .upload(file, (pct) => setUploads((u) => u.map((x) => (x.key === key ? { ...x, pct } : x))))
         .then(() => {
+          reload();
           setUploads((u) => u.map((x) => (x.key === key ? { ...x, status: "done", pct: 100 } : x)));
           setTimeout(() => setUploads((u) => u.filter((x) => x.key !== key)), 2500);
         })
@@ -83,7 +106,7 @@ export default function Panel() {
           <>
             <span className="hidden text-zinc-500 sm:inline">{displayName(user)}</span>
             <button className="btn-icon" title="Hesap ayarları" aria-label="Hesap ayarları" onClick={() => setAccountOpen(true)}><UserIcon className="h-4 w-4" /></button>
-            <button className="btn-ghost" onClick={() => { api.logout(); nav("/"); }}>Çıkış</button>
+            <button className="btn-ghost" onClick={async () => { await backend.logout().catch(() => {}); setMe(null); nav("/"); }}>Çıkış</button>
           </>
         }
       />
@@ -92,12 +115,12 @@ export default function Panel() {
         <section className="flex flex-col justify-between gap-5 border-b border-zinc-100 pb-7 sm:flex-row sm:items-center">
           <div>
             <p className="eyebrow">Ders kodunuz</p>
-            <p className="mt-2 font-mono text-4xl tracking-[0.2em] sm:text-5xl">{formatCode(user.code)}</p>
+            <p className="mt-2 font-mono text-4xl tracking-[0.2em] sm:text-5xl">{user.code ? formatCode(user.code) : "——"}</p>
             <p className="mt-2 text-xs text-zinc-400">Öğrencileriniz bu kodla ana sayfadan materyallerinize ulaşır.</p>
           </div>
           <div className="flex flex-col gap-3 sm:items-end">
             <div className="flex gap-2">
-              <button className="btn-ghost" onClick={() => navigator.clipboard.writeText(user.code).then(() => toast("Ders kodu kopyalandı"), () => toast("Kopyalanamadı", "error"))}><Copy className="h-4 w-4" />Kopyala</button>
+              <button className="btn-ghost" onClick={() => navigator.clipboard.writeText(user.code ?? "").then(() => toast("Ders kodu kopyalandı"), () => toast("Kopyalanamadı", "error"))}><Copy className="h-4 w-4" />Kopyala</button>
               <button className="btn-ghost" onClick={() => setConfirmRegen(true)}><RefreshCw className="h-4 w-4" />Yenile</button>
             </div>
             <p className="text-sm text-zinc-500">
@@ -159,13 +182,25 @@ export default function Panel() {
           </div>
         </div>
 
-        {tab === "active" ? (
+        {!loaded ? (
+          <div className="card divide-y divide-zinc-100" aria-busy="true">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="flex items-center gap-4 p-4">
+                <div className="h-11 w-11 animate-pulse rounded-lg bg-zinc-100" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3 w-1/3 animate-pulse rounded bg-zinc-100" />
+                  <div className="h-2.5 w-1/5 animate-pulse rounded bg-zinc-100" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : tab === "active" ? (
           active.length === 0 ? (
             <EmptyState title={q ? "Sonuç yok" : "Şu anda paylaşılan dosya yok"} text={q ? "Aramanızla eşleşen aktif dosya bulunamadı." : "Yukarıdan bir dosya yükleyin ve ders kodunuzu öğrencilerinizle paylaşın. Dosya 3 saat boyunca görünür."} />
           ) : (
             <ul className="card divide-y divide-zinc-100">
               {active.map((f) => {
-                const rem = api.remainingMs(f, now);
+                const rem = remainingMs(f, now);
                 return (
                   <li key={f.id} className="flex flex-wrap items-center gap-3 p-4 sm:flex-nowrap sm:gap-4">
                     <div className="flex min-w-0 flex-1 basis-full items-center gap-3 sm:basis-auto sm:gap-4">
@@ -177,8 +212,8 @@ export default function Panel() {
                     </div>
                     <div className="ml-auto flex items-center gap-2">
                       <span className={`font-mono text-xs ${rem < 30 * 60_000 ? "text-amber-600" : "text-zinc-500"}`} title="Öğrencilerin dosyayı görebileceği kalan süre">{formatRemaining(rem)} kaldı</span>
-                      <button className="btn-icon" title="İndir" onClick={() => api.downloadOwnFile(f.id)}><Download className="h-4 w-4" /></button>
-                      <button className="btn-ghost" disabled={busy === f.id} onClick={() => run(f.id, () => api.stopSharing(f.id), "Paylaşım durduruldu, dosya arşive taşındı")}>
+                      <button className="btn-icon" title="İndir" onClick={() => backend.downloadOwn(f.id).catch((e: Error) => toast(e.message, "error"))}><Download className="h-4 w-4" /></button>
+                      <button className="btn-ghost" disabled={busy === f.id} onClick={() => run(f.id, () => backend.stop(f.id), "Paylaşım durduruldu, dosya arşive taşındı")}>
                         {busy === f.id ? <Spinner /> : <Square className="h-4 w-4" />}Durdur
                       </button>
                     </div>
@@ -202,10 +237,10 @@ export default function Panel() {
                     </div>
                   </div>
                   <div className="ml-auto flex items-center gap-2">
-                    <button className="btn-primary" disabled={busy === f.id} onClick={() => run(f.id, () => api.reshareFile(f.id), "Tekrar paylaşıldı, 3 saat yeniden başladı")}>
+                    <button className="btn-primary" disabled={busy === f.id} onClick={() => run(f.id, () => backend.reshare(f.id), "Tekrar paylaşıldı, 3 saat yeniden başladı")}>
                       {busy === f.id ? <Spinner light /> : <Share className="h-4 w-4" />}Tekrar paylaş
                     </button>
-                    <button className="btn-icon" title="İndir" onClick={() => api.downloadOwnFile(f.id)}><Download className="h-4 w-4" /></button>
+                    <button className="btn-icon" title="İndir" onClick={() => backend.downloadOwn(f.id).catch((e: Error) => toast(e.message, "error"))}><Download className="h-4 w-4" /></button>
                     <button className="btn-icon text-red-600" title="Kalıcı sil" onClick={() => setToDelete(f)}><Trash2 className="h-4 w-4" /></button>
                   </div>
                 </li>
@@ -223,13 +258,13 @@ export default function Panel() {
         footer={
           <>
             <button className="btn-ghost" onClick={() => setConfirmRegen(false)}>Vazgeç</button>
-            <button className="btn-primary" disabled={busy === "regen"} onClick={() => run("regen", async () => { const c = await api.regenerateCode(); setConfirmRegen(false); return c; }, "Yeni ders kodunuz oluşturuldu")}>
+            <button className="btn-primary" disabled={busy === "regen"} onClick={() => run("regen", async () => { const code = await backend.regenerateCode(); setMe({ ...user, code }); setConfirmRegen(false); }, "Yeni ders kodunuz oluşturuldu")}>
               {busy === "regen" && <Spinner light />}Yenile
             </button>
           </>
         }
       >
-        Yeni bir 6 haneli kod oluşturulacak. Mevcut kod (<span className="font-mono text-zinc-900">{formatCode(user.code)}</span>) anında geçersiz olur; öğrencilerinize yeni kodu bildirmeniz gerekir.
+        Yeni bir 6 haneli kod oluşturulacak. Mevcut kod (<span className="font-mono text-zinc-900">{user.code ? formatCode(user.code) : ""}</span>) anında geçersiz olur; öğrencilerinize yeni kodu bildirmeniz gerekir.
       </Modal>
 
       <Modal
@@ -239,7 +274,7 @@ export default function Panel() {
         footer={
           <>
             <button className="btn-ghost" onClick={() => setToDelete(null)}>Vazgeç</button>
-            <button className="btn-danger" onClick={() => { const f = toDelete!; setToDelete(null); run(f.id, () => api.deleteFile(f.id), "Dosya kalıcı olarak silindi"); }}>
+            <button className="btn-danger" onClick={() => { const f = toDelete!; setToDelete(null); run(f.id, () => backend.remove(f.id), "Dosya kalıcı olarak silindi"); }}>
               <Trash2 className="h-4 w-4" />Sil
             </button>
           </>
@@ -253,11 +288,14 @@ export default function Panel() {
   );
 }
 
-export function AccountModal({ user, onClose }: { user: User; onClose: () => void }) {
+export function AccountModal({ user, onClose }: { user: Me; onClose: () => void }) {
   const toast = useToast();
+  const { refresh } = useAuth();
   const [p, setP] = useState<AcademicProfile>({ title: user.title, name: user.name, email: user.email, faculty: user.faculty, department: user.department });
+  const [current, setCurrent] = useState("");
   const [pw, setPw] = useState("");
   const [saving, setSaving] = useState(false);
+  const isAdmin = user.role === "admin";
   return (
     <Modal
       open
@@ -272,7 +310,9 @@ export function AccountModal({ user, onClose }: { user: User; onClose: () => voi
             onClick={async () => {
               setSaving(true);
               try {
-                await api.updateProfile(p, pw);
+                if (!isAdmin) await backend.updateProfile(p);
+                if (pw || current) await backend.changePassword(current, pw);
+                await refresh();
                 toast("Bilgileriniz kaydedildi");
                 onClose();
               } catch (e) {
@@ -288,9 +328,13 @@ export function AccountModal({ user, onClose }: { user: User; onClose: () => voi
       }
     >
       <div className="mt-4">
-        <ProfileFields value={p} onChange={setP} email="readonly" />
-        <label className="label mt-4">Yeni şifre (isteğe bağlı)</label>
+        {!isAdmin && <ProfileFields value={p} onChange={setP} email="readonly" />}
+        <p className={`text-xs font-medium text-zinc-900 ${isAdmin ? "" : "mt-6"}`}>Şifre değiştir</p>
+        <label className="label mt-3">Mevcut şifre</label>
+        <input type="password" className="input text-zinc-900" value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" />
+        <label className="label mt-3">Yeni şifre</label>
         <input type="password" className="input text-zinc-900" placeholder="En az 8 karakter" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" />
+        <p className="mt-2 text-xs text-zinc-400">Şifrenizi değiştirmek istemiyorsanız bu alanları boş bırakın.</p>
       </div>
     </Modal>
   );

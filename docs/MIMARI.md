@@ -1,122 +1,78 @@
-# 3Saat · Mimari ve güvenlik planı
+# 3Saat · Mimari ve güvenlik
 
-Bu belge, prototipin gerçek altyapıya bağlanması için planı anlatır. `src/lib/store.ts` içindeki her fonksiyon aşağıdaki uç noktalardan birine karşılık gelir.
+Kurulum adımları için bkz. [KURULUM.md](../KURULUM.md).
 
 ## Bileşenler
 
+Tüm sistem tek bir Cloudflare Worker'dır. Ayrı bir sunucu, ayrı bir kimlik servisi yoktur.
+
 | Katman | Teknoloji | Görev |
 | --- | --- | --- |
-| Arayüz | React + Vite (bu depo) | Tüm ekranlar |
-| Kimlik doğrulama | Supabase Auth | Akademisyen ve yönetici girişi, e-posta doğrulama, şifre sıfırlama |
-| Veritabanı | Supabase Postgres + RLS | Profiller, roller, ders kodları, dosya kayıtları |
-| Sunucu mantığı | Supabase Edge Functions | Yükleme/indirme bağlantıları, öğrenci erişimi, yönetici işlemleri |
-| Dosya deposu | Cloudflare R2 (kapalı bucket) | Dosyaların kendisi (10 GB ücretsiz, çıkış trafiği ücretsiz) |
+| Arayüz | React + Vite (`src/`) | Tüm ekranlar; Worker statik dosya olarak sunar |
+| API | Cloudflare Worker + Hono (`worker/`) | Giriş, kayıt, dosya kayıtları, öğrenci erişimi, yönetici işlemleri |
+| Veritabanı | Cloudflare D1 (SQLite) | Kullanıcılar, ders kodları, dosya kayıtları, oturumlar, deneme sayaçları |
+| Dosya deposu | Cloudflare R2 (kapalı depo) | Dosyaların kendisi; dışarıya hiçbir zaman açık değil |
+| Zamanlanmış iş | Worker cron (her gece) | Yarım yüklemeler, eski oturumlar ve deneme kayıtları, isteğe bağlı eski arşiv temizliği |
+
+Ortak sabitler (3 saat, 500 MB, unvanlar, deneme sınırları, e-posta alan adı kontrolü) `shared/constants.ts` içindedir ve hem arayüz hem sunucu aynı dosyayı kullanır.
+
+Arayüz iki arka uçla derlenebilir: `src/lib/backend/http.ts` gerçek API'ye bağlanır, `src/lib/backend/demo.ts` her şeyi tarayıcıda tutar. `VITE_DEMO=1` ile derlenen sürüm (GitHub Pages'teki demo) hiçbir sunucuya istek atmaz.
 
 ## Veritabanı
 
-```sql
-create type app_role as enum ('admin', 'academic');
+Şema: [`migrations/0001_init.sql`](../migrations/0001_init.sql)
 
-create table profiles (
-  id uuid primary key references auth.users on delete cascade,
-  title text not null check (title in ('Prof. Dr.','Doç. Dr.','Dr. Öğr. Üyesi','Öğr. Gör.','Öğr. Gör. Dr.','Arş. Gör.','Arş. Gör. Dr.')),
-  full_name text not null,
-  email text not null,
-  faculty text not null,
-  department text not null,
-  is_active boolean not null default true,
-  created_at timestamptz not null default now()
-);
+| Tablo | İçerik |
+| --- | --- |
+| `users` | E-posta, şifre özeti, rol (`admin` / `academic`), durum (`pending` / `active` / `disabled`), unvan, ad soyad, fakülte, bölüm |
+| `course_codes` | Akademisyen başına bir adet benzersiz 6 haneli kod |
+| `files` | Dosya adı, R2 anahtarı, boyut, tür, durum (`pending` / `ready`), `shared_at` |
+| `sessions` | Oturum belirtecinin SHA-256 özeti, kullanıcı, bitiş zamanı |
+| `attempts` | Ders kodu ve giriş denemeleri (IP adresi tuzlu özet olarak) |
 
--- Roller profilde DEĞİL, ayrı tabloda tutulur (yetki yükseltme saldırılarını önler)
-create table user_roles (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users on delete cascade,
-  role app_role not null,
-  unique (user_id, role)
-);
+Bir dosya `shared_at + 3 saat` geçmediyse öğrenciye görünür. "Durdur" `shared_at` alanını boşaltır, "Tekrar paylaş" şimdiki zamana çeker. Süre dolunca hiçbir şey silinmez; dosya sadece öğrenci sorgusuna artık girmez, akademisyenin arşivinde kalır.
 
-create table course_codes (
-  owner_id uuid primary key references profiles on delete cascade,
-  code char(6) not null unique check (code ~ '^\d{6}$'),
-  updated_at timestamptz not null default now()
-);
+## Akışlar
 
-create table files (
-  id uuid primary key default gen_random_uuid(),
-  owner_id uuid not null references profiles on delete cascade,
-  original_name text not null,
-  r2_key text not null unique,
-  size_bytes bigint not null check (size_bytes <= 524288000),
-  mime_type text not null,
-  status text not null default 'pending' check (status in ('pending','ready')),
-  shared_at timestamptz,          -- null: paylaşım durdurulmuş
-  created_at timestamptz not null default now()
-);
+**Yükleme**
 
-create table code_attempts (       -- hız sınırlama, istemci erişimi yok
-  id bigserial primary key,
-  ip_hash text not null,
-  success boolean not null,
-  attempted_at timestamptz not null default now()
-);
-```
+1. Arayüz `POST /api/me/files/upload-init` ile dosya adı, boyut ve türü bildirir. Sunucu boyutu (≤ 500 MB) kontrol eder, `pending` bir kayıt açar ve 15 dakika geçerli, **boyutu imzaya dahil edilmiş** bir R2 yükleme bağlantısı döner.
+2. Tarayıcı dosyayı doğrudan R2'ye yükler (Worker'dan geçmez, ilerleme çubuğu buradan gelir).
+3. `POST /api/me/files/:id/complete` ile sunucu R2'de nesnenin gerçekten var olduğunu ve boyutunun bildirilenle aynı olduğunu kontrol eder, kaydı `ready` yapar ve 3 saatlik paylaşımı başlatır.
 
-Kural: bir dosya `shared_at > now() - interval '3 hours'` ise aktiftir.
+**Öğrenci**
 
-`has_role(_user_id, _role)` fonksiyonu `security definer` olarak tanımlanır; RLS politikaları bunu kullanır.
+1. `POST /api/student/files { code }`: kod yanlışsa deneme sayılır; doğruysa sadece akademisyenin unvan+adı, bölümü ve şu an paylaşılan dosyaların adı, boyutu ve türü döner.
+2. `POST /api/student/download { code, fileId }`: dosya hâlâ 3 saat içindeyse 2 dakika geçerli bir indirme bağlantısı döner. Süresi geçmişse `expired` hatası döner.
 
-### RLS politikaları
+**Kayıt ve onay**
 
-- **profiles:** kullanıcı yalnızca kendi satırını görür; yönetici hepsini görür.
-- **course_codes, files:** akademisyen yalnızca kendi satırlarını **okur**. İstemciden INSERT/UPDATE/DELETE yoktur.
-- **user_roles, code_attempts:** istemciye tamamen kapalı.
-- **Anonim kullanıcı (öğrenci):** hiçbir tabloya erişimi yoktur; sadece edge function'ları çağırır.
+Akademisyen kurum e-postasıyla kayıt olur, hesap `pending` durumunda açılır ve giriş yapamaz. Yönetici panelinde "Onayla" deyince hesap `active` olur ve ders kodu atanır. Yöneticinin eklediği hesaplar doğrudan `active` açılır; yönetici geçici şifreyi ekranda görür ve akademisyene kendisi iletir.
 
-## Akademisyen hesabı ve kayıt
+## Güvenlik
 
-Akademisyen için tutulan bilgiler: **unvan, ad soyad, kurumsal e-posta, fakülte/yüksekokul, bölüm** ve şifre (şifre Supabase Auth'ta hash'li tutulur, `profiles` tablosunda yer almaz). Sistem sadece kurum içi kullanım içindir; ek onay/izin adımı yoktur.
+- **Dosyalar kapalı:** R2 deposunun herkese açık adresi yoktur. Her erişim, sunucunun yetki kontrolünden sonra ürettiği kısa ömürlü imzalı bağlantıyla olur (öğrenci 2 dk, akademisyen 5 dk, yükleme 15 dk).
+- **Veri sızıntısı yok:** Öğrenciye dönen yanıtlarda e-posta, kullanıcı kimliği, R2 anahtarı, arşiv ya da başka akademisyen bilgisi bulunmaz. Akademisyen sadece kendi dosyalarını görebilir; her sorgu `owner_id` ile süzülür.
+- **Şifreler:** PBKDF2-SHA256, 100.000 tur, kullanıcıya özel tuz. Var olmayan e-postalarda da aynı hesaplama yapılır, böylece cevap süresinden hesap olup olmadığı anlaşılmaz.
+- **Oturum:** 7 gün geçerli, `__Host-` önekli, `HttpOnly`, `Secure`, `SameSite=Lax` çerez. Veritabanında belirtecin kendisi değil SHA-256 özeti tutulur. Şifre değişince ve yönetici şifre sıfırlayınca tüm oturumlar kapanır.
+- **CSRF:** Veri değiştiren her istekte `Origin` başlığının sitenin kendisi olduğu kontrol edilir.
+- **Kaba kuvvet:** Ders kodunda IP başına 15 dakikada 10 hatalı deneme, girişte IP + e-posta başına 15 dakikada 8 hatalı deneme sonrası geçici kilit. Kayıt da sınırlıdır. IP adresleri düz değil, gizli bir tuzla özetlenerek saklanır.
+- **Ders kodu:** Kriptografik rastgele, sapmasız üretilir, benzersizdir. Yenilenince eski kod anında geçersiz olur.
+- **Girdi doğrulama:** Tüm istek gövdeleri sunucuda `zod` şemalarıyla doğrulanır.
+- **İndirme adı:** `Content-Disposition` RFC 6266'ya göre üretilir; Türkçe karakterli dosya adları doğru iner, başlık enjeksiyonu yapılamaz.
+- **Gizli değerler:** R2 anahtarları ve IP tuzu sadece `wrangler secret` ile Cloudflare'de tutulur, depoda yoktur. Yerel deneme modu (`DEV_MODE`) sadece `.dev.vars` ile açılır ve bu dosya git'e girmez.
 
-- **Kendi kaydı:** Sadece kurum e-posta alan adı (`ALLOWED_EMAIL_DOMAIN`, ör. `ornek.edu.tr`) kabul edilir. Alt alan adları (ör. öğrenci adresleri `ogrenci.ornek.edu.tr`) reddedilir. Kontrol hem arayüzde hem sunucuda yapılır: Supabase **"Before User Created" auth hook**'u alan adı dışındaki kayıtları reddeder, böylece API doğrudan çağrılsa bile atlatılamaz. E-posta doğrulaması zorunludur.
-- **Yönetici ekleme:** Alan adı sınırı yoktur (ör. misafir öğretim üyeleri). Hesap e-posta doğrulaması olmadan aktif olur.
-- Kayıt bilgileri `raw_user_meta_data` ile gelir; `on auth.users insert` tetikleyicisi `profiles`, `user_roles` ('academic') ve `course_codes` satırlarını oluşturur.
-- Akademisyen unvan, ad, fakülte ve bölümünü hesap ayarlarından değiştirebilir; e-posta değişikliği yöneticiden istenir.
+## API özeti
 
-## Edge Functions
-
-| Fonksiyon | Kim | Ne yapar |
+| Uç nokta | Kim | Açıklama |
 | --- | --- | --- |
-| `upload-init` | Akademisyen | Boyutu (≤ 500 MB) ve adı doğrular, `pending` kayıt açar, 15 dk geçerli R2 PUT bağlantısı döner |
-| `upload-complete` | Akademisyen | R2'de dosyanın varlığını ve boyutunu doğrular, `ready` yapar, `shared_at = now()` |
-| `file-action` | Akademisyen | `reshare` / `stop` / `delete` / `download` (sahiplik kontrolüyle) |
-| `regenerate-code` | Akademisyen | Kriptografik rastgele, benzersiz yeni kod |
-| `student-files` | Herkes | Kodu doğrular, hız sınırı uygular; akademisyenin unvan + adı, bölümü ve sadece aktif dosyaların ad/boyut/türünü döner |
-| `student-download` | Herkes | Kodu ve dosyanın hâlâ aktif olduğunu yeniden doğrular, 2 dk geçerli GET bağlantısı döner |
-| `admin-academics` | Yönetici | Listele, ekle (`auth.admin.createUser`), dondur, şifre sıfırla, sil (R2 dosyalarıyla birlikte) |
+| `GET /api/config` | herkes | Kayıt alan adı, depo hazır mı |
+| `POST /api/auth/register` · `login` · `logout`, `GET /api/auth/me` | herkes | Hesap işlemleri |
+| `PATCH /api/me/profile`, `POST /api/me/password`, `POST /api/me/code/regenerate` | akademisyen | Hesap ve ders kodu |
+| `GET /api/me/files`, `POST …/upload-init`, `POST …/:id/complete` · `reshare` · `stop`, `DELETE …/:id`, `GET …/:id/download` | akademisyen | Dosyalar |
+| `POST /api/student/files` · `download` | herkes (kodla) | Öğrenci erişimi |
+| `GET /api/admin/academics` · `stats`, `POST /api/admin/academics`, `…/:id/approve` · `status` · `reset-password`, `DELETE …/:id` | yönetici | Yönetim |
 
-Tüm girdiler zod ile doğrulanır. Hata mesajları geneldir (iç ayrıntı sızdırmaz). Service role anahtarı yalnızca edge function ortamında bulunur.
+## Ücretsiz plan sınırları
 
-## Güvenlik önlemleri
-
-1. **Kapalı depo:** R2 bucket herkese kapalıdır; dosyalar sadece kısa ömürlü imzalı bağlantılarla indirilir (öğrenci 2 dk, akademisyen 5 dk).
-2. **Kod tahmini:** 6 hane = 1.000.000 olasılık. IP adresi tuzlu SHA-256 ile saklanır; 15 dakikada 10 hatalı denemede kilit. Bu sınırla bir saldırganın rastgele bir kodu bulması pratikte imkânsızdır.
-3. **Veri minimizasyonu:** Öğrenciye dönen yanıtta `r2_key`, sahip kimliği, e-posta veya bitiş zamanı yoktur.
-4. **Kod URL'de yok:** Ders kodu adres çubuğuna, geçmişe veya paylaşılan bağlantılara yazılmaz.
-5. **Dondurulmuş hesap:** Girişi ve ders kodu anında devre dışı kalır.
-6. **Şifreler:** En az 8 karakter; Supabase Auth tarafından hash'lenir; sıfırlama e-postayla.
-7. **İlk yönetici:** Otomatik atanmaz; kurulumda SQL ile elle verilir.
-
-## Kurulum adımları (sonraki aşama)
-
-1. Supabase projesi + yukarıdaki şema ve RLS.
-2. Cloudflare hesabı, kapalı R2 bucket, API anahtarı; bucket CORS'una sitenin adresi (PUT/GET).
-3. Kurum e-posta alan adı: arayüz için `VITE_ALLOWED_EMAIL_DOMAIN`, sunucu için auth hook'ta aynı değer.
-4. Edge function gizli değişkenleri: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `IP_HASH_SALT`. **Anahtarlar asla bu depoya yazılmaz.**
-5. `src/lib/store.ts` fonksiyonlarının gerçek çağrılarla değiştirilmesi.
-6. Güvenlik testleri: başka akademisyenin dosyasına erişim, süresi dolmuş dosya, hız sınırı, rol yükseltme.
-
-## Açık kararlar
-
-- Kurum e-posta alan adı nedir? (Şu an yer tutucu: `universite.edu.tr`)
-- Öğrenci kalan süreyi görsün mü? (Şu an: hayır)
-- Dosya sınırı 500 MB mı, 1 GB mı? (Şu an: 500 MB)
+R2'de 10 GB depolama, ayda 1 milyon yükleme ve 10 milyon indirme işlemi ücretsizdir; indirme trafiği hiç ücretlendirilmez. Worker'da günde 100.000 API isteği ücretsizdir (arayüz dosyaları buna dahil değil). D1'de günde 5 milyon okuma ve 100.000 yazma ücretsizdir. Dosyalar Worker'dan geçmediği için 500 MB'lık bir dosya da tek bir API isteği kadar yük oluşturur. Sınır aşılırsa Workers Paid planı aylık 5 dolardır.
