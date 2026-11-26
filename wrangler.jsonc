@@ -19,7 +19,7 @@
       "binding": "DB",
       "database_name": "3saat",
       // `npx wrangler d1 create 3saat` komutunun verdiği kimliği buraya yazın
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "1624d098-1d05-40e6-a958-843ea0312157",
       "migrations_dir": "migrations"
     }
   ],
